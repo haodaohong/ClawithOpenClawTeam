@@ -56,6 +56,7 @@ interface Message {
     content: string;
     fileName?: string;
     toolCalls?: ToolCall[];
+    thinking?: string;
 }
 
 export default function Chat() {
@@ -73,6 +74,7 @@ export default function Chat() {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const pendingToolCalls = useRef<ToolCall[]>([]);
     const streamContent = useRef('');
+    const thinkingContent = useRef('');
 
     const { data: agent } = useQuery({
         queryKey: ['agent', id],
@@ -144,12 +146,24 @@ export default function Chat() {
             };
             ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
-                if (data.type === 'chunk') {
+                if (data.type === 'thinking') {
+                    // Accumulate thinking content
+                    thinkingContent.current += data.content;
+                    setMessages(prev => {
+                        const last = prev[prev.length - 1];
+                        if (last && last.role === 'assistant') {
+                            const updated = [...prev];
+                            updated[updated.length - 1] = { ...last, thinking: thinkingContent.current };
+                            return updated;
+                        }
+                        return [...prev, { role: 'assistant', content: '', thinking: thinkingContent.current }];
+                    });
+                } else if (data.type === 'chunk') {
                     // Streaming text chunk — accumulate and update live preview
                     streamContent.current += data.content;
                     setMessages(prev => {
                         const last = prev[prev.length - 1];
-                        if (last && last.role === 'assistant' && last === prev[prev.length - 1]) {
+                        if (last && last.role === 'assistant') {
                             // Update the streaming message in-place
                             const updated = [...prev];
                             updated[updated.length - 1] = { ...last, content: streamContent.current };
@@ -164,16 +178,18 @@ export default function Chat() {
                 } else if (data.type === 'done') {
                     // Final response — replace streaming message with final + tool calls
                     const toolCalls = pendingToolCalls.current.length > 0 ? [...pendingToolCalls.current] : undefined;
+                    const thinking = thinkingContent.current || undefined;
                     pendingToolCalls.current = [];
                     streamContent.current = '';
+                    thinkingContent.current = '';
                     setStreaming(false);
                     setMessages(prev => {
                         const updated = [...prev];
                         // Replace the last streaming assistant message
                         if (updated.length > 0 && updated[updated.length - 1].role === 'assistant') {
-                            updated[updated.length - 1] = { role: 'assistant', content: data.content, toolCalls };
+                            updated[updated.length - 1] = { role: 'assistant', content: data.content, toolCalls, thinking };
                         } else {
-                            updated.push({ role: 'assistant', content: data.content, toolCalls });
+                            updated.push({ role: 'assistant', content: data.content, toolCalls, thinking });
                         }
                         return updated;
                     });
@@ -238,6 +254,7 @@ export default function Chat() {
         // Reset streaming state for new response
         pendingToolCalls.current = [];
         streamContent.current = '';
+        thinkingContent.current = '';
         setStreaming(true);
 
         let userMsg = input.trim();
@@ -308,6 +325,30 @@ export default function Chat() {
                                     const fi = fe === 'pdf' ? '\uD83D\uDCC4' : (fe === 'csv' || fe === 'xlsx' || fe === 'xls') ? '\uD83D\uDCCA' : (fe === 'docx' || fe === 'doc') ? '\uD83D\uDCDD' : '\uD83D\uDCCE';
                                     return (<div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', background: 'rgba(0,0,0,0.08)', borderRadius: '6px', padding: '4px 8px', marginBottom: msg.content ? '4px' : '0', fontSize: '11px', border: '1px solid var(--border-subtle)', color: 'var(--text-secondary)' }}><span>{fi}</span><span style={{ fontWeight: 500, color: 'var(--text-primary)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{msg.fileName}</span></div>);
                                 })()}
+                                {msg.thinking && (
+                                    <details style={{
+                                        marginBottom: '8px', fontSize: '12px',
+                                        background: 'rgba(147, 130, 220, 0.08)', borderRadius: '6px',
+                                        border: '1px solid rgba(147, 130, 220, 0.15)',
+                                    }}>
+                                        <summary style={{
+                                            padding: '6px 10px', cursor: 'pointer',
+                                            color: 'rgba(147, 130, 220, 0.9)', fontWeight: 500,
+                                            userSelect: 'none', display: 'flex', alignItems: 'center', gap: '4px',
+                                        }}>
+                                            💭 Thinking
+                                        </summary>
+                                        <div style={{
+                                            padding: '4px 10px 8px',
+                                            fontSize: '12px', lineHeight: '1.6',
+                                            color: 'var(--text-secondary)',
+                                            whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                                            maxHeight: '300px', overflow: 'auto',
+                                        }}>
+                                            {msg.thinking}
+                                        </div>
+                                    </details>
+                                )}
                                 {msg.toolCalls && msg.toolCalls.length > 0 && (
                                     <details style={{
                                         marginBottom: '8px', fontSize: '12px',

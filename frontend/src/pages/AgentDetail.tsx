@@ -650,7 +650,7 @@ export default function AgentDetail() {
         } catch (e) { alert('Failed: ' + e); }
         setExpirySaving(false);
     };
-    interface ChatMsg { role: 'user' | 'assistant' | 'tool_call'; content: string; fileName?: string; toolName?: string; toolArgs?: any; toolStatus?: 'running' | 'done'; toolResult?: string; }
+    interface ChatMsg { role: 'user' | 'assistant' | 'tool_call'; content: string; fileName?: string; toolName?: string; toolArgs?: any; toolStatus?: 'running' | 'done'; toolResult?: string; thinking?: string; }
     const [chatMessages, setChatMessages] = useState<ChatMsg[]>([]);
     const [chatInput, setChatInput] = useState('');
     const [wsConnected, setWsConnected] = useState(false);
@@ -756,7 +756,15 @@ export default function AgentDetail() {
             ws.onerror = () => { if (!cancelled) setWsConnected(false); };
             ws.onmessage = (e) => {
                 const d = JSON.parse(e.data);
-                if (d.type === 'tool_call') {
+                if (d.type === 'thinking') {
+                    setChatMessages(prev => {
+                        const last = prev[prev.length - 1];
+                        if (last && last.role === 'assistant' && (last as any)._streaming) {
+                            return [...prev.slice(0, -1), { ...last, thinking: (last.thinking || '') + d.content } as any];
+                        }
+                        return [...prev, { role: 'assistant', content: '', thinking: d.content, _streaming: true } as any];
+                    });
+                } else if (d.type === 'tool_call') {
                     setChatMessages(prev => {
                         const toolMsg: ChatMsg = { role: 'tool_call', content: '', toolName: d.name, toolArgs: d.args, toolStatus: d.status, toolResult: d.result };
                         if (d.status === 'done') {
@@ -775,7 +783,8 @@ export default function AgentDetail() {
                 } else if (d.type === 'done') {
                     setChatMessages(prev => {
                         const last = prev[prev.length - 1];
-                        if (last && last.role === 'assistant' && (last as any)._streaming) return [...prev.slice(0, -1), { role: 'assistant', content: d.content }];
+                        const thinking = (last && last.role === 'assistant' && (last as any)._streaming) ? last.thinking : undefined;
+                        if (last && last.role === 'assistant' && (last as any)._streaming) return [...prev.slice(0, -1), { role: 'assistant', content: d.content, thinking }];
                         return [...prev, { role: d.role, content: d.content }];
                     });
                     // Silently refresh session list to update last_message_at (no loading spinner)
@@ -2117,6 +2126,30 @@ export default function AgentDetail() {
                                                             const fi = fe === 'pdf' ? '📄' : (fe === 'csv' || fe === 'xlsx' || fe === 'xls') ? '📊' : (fe === 'docx' || fe === 'doc') ? '📝' : '📎';
                                                             return (<div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', background: 'rgba(0,0,0,0.08)', borderRadius: '6px', padding: '4px 8px', marginBottom: msg.content ? '4px' : '0', fontSize: '11px', border: '1px solid var(--border-subtle)', color: 'var(--text-secondary)' }}><span>{fi}</span><span style={{ fontWeight: 500, color: 'var(--text-primary)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{msg.fileName}</span></div>);
                                                         })()}
+                                                        {msg.thinking && (
+                                                            <details style={{
+                                                                marginBottom: '8px', fontSize: '12px',
+                                                                background: 'rgba(147, 130, 220, 0.08)', borderRadius: '6px',
+                                                                border: '1px solid rgba(147, 130, 220, 0.15)',
+                                                            }}>
+                                                                <summary style={{
+                                                                    padding: '6px 10px', cursor: 'pointer',
+                                                                    color: 'rgba(147, 130, 220, 0.9)', fontWeight: 500,
+                                                                    userSelect: 'none', display: 'flex', alignItems: 'center', gap: '4px',
+                                                                }}>
+                                                                    💭 Thinking
+                                                                </summary>
+                                                                <div style={{
+                                                                    padding: '4px 10px 8px',
+                                                                    fontSize: '12px', lineHeight: '1.6',
+                                                                    color: 'var(--text-secondary)',
+                                                                    whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                                                                    maxHeight: '300px', overflow: 'auto',
+                                                                }}>
+                                                                    {msg.thinking}
+                                                                </div>
+                                                            </details>
+                                                        )}
                                                         {msg.role === 'assistant' ? <MarkdownRenderer content={msg.content} /> : msg.content ? <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div> : null}
                                                     </div>
                                                 </div>

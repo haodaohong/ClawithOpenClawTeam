@@ -94,6 +94,7 @@ async def call_llm(
     user_id=None,
     on_chunk=None,
     on_tool_call=None,
+    on_thinking=None,
 ) -> str:
     """Call LLM via OpenAI-compatible API with function-calling tool loop.
     
@@ -220,12 +221,13 @@ async def call_llm(
 
                                 # ── streaming think-tag filter ──
                                 # Process text through a simple state machine:
-                                #   _in_think=False: emit text, but watch for "<think>"
-                                #   _in_think=True:  swallow text until "</think>"
+                                #   _in_think=False: emit text via on_chunk
+                                #   _in_think=True:  emit text via on_thinking
                                 # We buffer chars that *might* be part of a tag to
                                 # avoid sending partial tags to the client.
                                 _tag_buffer += text
                                 emit = ""
+                                think_emit = ""
                                 i = 0
                                 buf = _tag_buffer
                                 while i < len(buf):
@@ -260,10 +262,20 @@ async def call_llm(
                                             elif close_tag.startswith(tag_candidate):
                                                 _tag_buffer = buf[i:]
                                                 break
-                                        i += 1  # swallow char inside think block
+                                            else:
+                                                think_emit += buf[i]
+                                                i += 1
+                                        else:
+                                            think_emit += buf[i]
+                                            i += 1
                                 else:
                                     _tag_buffer = ""  # fully consumed
 
+                                if think_emit and on_thinking:
+                                    try:
+                                        await on_thinking(think_emit)
+                                    except Exception:
+                                        pass
                                 if emit and on_chunk:
                                     try:
                                         await on_chunk(emit)
@@ -636,6 +648,10 @@ async def websocket_chat(
                             except Exception as _tc_err:
                                 print(f"[WS] Failed to save tool_call: {_tc_err}")
                     
+                    async def thinking_to_ws(text: str):
+                        """Send thinking chunks to client for collapsible display."""
+                        await websocket.send_json({"type": "thinking", "content": text})
+
                     assistant_response = await call_llm(
                         llm_model,
                         conversation[-ctx_size:],
@@ -645,6 +661,7 @@ async def websocket_chat(
                         user_id=user_id,
                         on_chunk=stream_to_ws,
                         on_tool_call=tool_call_to_ws,
+                        on_thinking=thinking_to_ws,
                     )
                     print(f"[WS] LLM response: {assistant_response[:80]}")
 
